@@ -1,0 +1,52 @@
+{
+  "searchParameters": {
+    "q": "attention is all you need",
+    "gl": "us",
+    "hl": "en",
+    "num": 10,
+    "page": 1,
+    "type": "search"
+  },
+  "organic": [
+    {
+      "title": "Attention Is All You Need",
+      "link": "https://arxiv.org/abs/1706.03762",
+      "snippet": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.",
+      "sitelinks": [
+        { "title": "PDF", "link": "https://arxiv.org/pdf/1706.03762" }
+      ],
+      "position": 1
+    },
+    {
+      "title": "Attention Is All You Need - Wikipedia",
+      "link": "https://en.wikipedia.org/wiki/Attention_Is_All_You_Need",
+      "snippet": "A 2017 landmark research paper in machine learning authored by eight scientists working at Google.",
+      "position": 2
+    }
+  ],
+  "knowledgeGraph": {
+    "title": "Attention Is All You Need",
+    "type": "Research paper",
+    "website": "https://arxiv.org/abs/1706.03762",
+    "description": "A 2017 landmark research paper in machine learning.",
+    "descriptionSource": "Wikipedia",
+    "descriptionLink": "https://en.wikipedia.org/wiki/Attention_Is_All_You_Need",
+    "attributes": {
+      "Published": "2017",
+      "Authors": "Vaswani et al."
+    }
+  },
+  "peopleAlsoAsk": [
+    {
+      "question": "What is Attention Is All You Need about?",
+      "snippet": "The paper introduced the Transformer architecture.",
+      "title": "Attention Is All You Need - Wikipedia",
+      "link": "https://en.wikipedia.org/wiki/Attention_Is_All_You_Need"
+    }
+  ],
+  "relatedSearches": [
+    { "query": "transformer architecture" },
+    { "query": "self attention mechanism" }
+  ],
+  "credits": 1
+}

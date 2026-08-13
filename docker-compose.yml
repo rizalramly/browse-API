@@ -1,0 +1,57 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gen}
+      POSTGRES_DB: ${POSTGRES_DB:-gen}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gen} -d ${POSTGRES_DB:-gen}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    volumes:
+      - ./searxng:/etc/searxng:ro
+      # GenXNG branding overrides for the stock UI
+      # (the homepage logo is searxng.png, referenced from the theme CSS)
+      - ./searxng/genxng.png:/usr/local/searxng/searx/static/themes/simple/img/searxng.png:ro
+      - ./searxng/genxng.svg:/usr/local/searxng/searx/static/themes/simple/img/searxng.svg:ro
+      - ./searxng/index.html:/usr/local/searxng/searx/templates/simple/index.html:ro
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-me}
+      SEARXNG_BASE_URL: http://searxng:8080/
+    ports:
+      - "8081:8080"   # exposed to host for debugging; internal callers use http://searxng:8080
+    restart: unless-stopped
+
+volumes:
+  pgdata:
