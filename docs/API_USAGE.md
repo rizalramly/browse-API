@@ -4,9 +4,9 @@ _Last updated: 2026-08-14_
 
 How to call the gen-api web-search service, from zero to production use.
 Audience: developers integrating RAG pipelines, agents, or any internal
-consumer. For operating the service itself (deploy, config, providers), see
-the [README](../README.md); for running it in production (dashboards, alert
-thresholds, incident response), see the [RUNBOOK](RUNBOOK.md).
+consumer. The [complete manual](MANUAL.md) covers everything (architecture,
+configuration, providers, operations); the [RUNBOOK](RUNBOOK.md) covers
+running it in production (dashboards, alert thresholds, incident response).
 
 ---
 

@@ -109,9 +109,11 @@ ruff check .
 mypy
 ```
 
-A step-by-step consumer guide (auth, all endpoints, error handling, credits,
-rate limits) lives in [docs/API_USAGE.md](docs/API_USAGE.md). Operators:
-[docs/RUNBOOK.md](docs/RUNBOOK.md) — dashboard questions with PromQL, alert
+Documentation: [docs/MANUAL.md](docs/MANUAL.md) is the complete manual
+(architecture, deployment, full configuration and API reference, providers,
+quality system, governance, operations, development, troubleshooting).
+Companions: [docs/API_USAGE.md](docs/API_USAGE.md) — step-by-step consumer
+guide; [docs/RUNBOOK.md](docs/RUNBOOK.md) — dashboards with PromQL, alert
 thresholds, block-spike response, weekly probe schedule, and the fallback
 economics note.
 
