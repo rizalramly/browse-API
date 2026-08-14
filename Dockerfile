@@ -4,6 +4,7 @@ WORKDIR /srv
 
 COPY pyproject.toml README.md ./
 COPY app ./app
+COPY policy ./policy
 
 RUN pip install --no-cache-dir .
 

@@ -4,6 +4,7 @@ Pipeline: auth -> rate limit -> quota check -> cache -> provider -> deduct
 credits (success only) -> usage log. Verticals whose configured provider isn't
 implemented return 501 with a clear message instead of failing opaquely.
 """
+import hashlib
 import logging
 import time
 from collections.abc import Callable, Coroutine
@@ -12,18 +13,23 @@ from typing import Annotated, Any
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.deps import ProviderFactory, get_db, get_provider_factory, get_redis
+from app.api.deps import ProviderFactory, get_db, get_policy, get_provider_factory, get_redis
 from app.auth import require_api_key
 from app.cache import ResponseCache, build_cache_key
 from app.config import ProviderName, Vertical, get_settings
 from app.db import ApiKey, Database
 from app.metrics import (
     CACHE_REQUESTS,
+    DEGRADED_RESPONSES,
+    FALLTHROUGH,
+    POLICY_BLOCKED,
     PROVIDER_LATENCY,
     PROVIDER_REQUESTS,
+    QUALITY_SCORE,
     REQUEST_LATENCY,
     REQUESTS,
 )
+from app.policy import PolicyBlockedError, PolicyGate
 from app.providers.base import (
     ProviderError,
     ProviderNotConfiguredError,
@@ -64,6 +70,41 @@ RESPONSE_MODELS: dict[Vertical, type[BaseSearchResponse]] = {
 
 # Blocks grafted onto /search from the commercial provider when enrichment is on.
 ENRICHMENT_BLOCKS = ("knowledgeGraph", "peopleAlsoAsk")
+
+# The block that must be non-empty for a fall-through result to replace the
+# degraded primary one.
+PRIMARY_BLOCK: dict[Vertical, str] = {
+    Vertical.SEARCH: "organic",
+    Vertical.IMAGES: "images",
+    Vertical.NEWS: "news",
+    Vertical.VIDEOS: "videos",
+}
+
+
+async def _try_fallthrough(
+    blocks: dict[str, Any],
+    body: SearchRequest,
+    vertical: Vertical,
+    provider_factory: ProviderFactory,
+) -> tuple[dict[str, Any], bool]:
+    """Plan 2.3: degraded genxng result -> try the commercial provider.
+
+    Returns (blocks, served_by_commercial). Any failure keeps the original
+    degraded result — fall-through must never make a response worse.
+    """
+    try:
+        commercial = provider_factory(ProviderName.COMMERCIAL)
+        alternative = await _timed_provider_search(commercial, body, vertical)
+    except ProviderError as exc:
+        FALLTHROUGH.labels(vertical.value, "error").inc()
+        logger.warning("quality fall-through failed", extra={"vertical": vertical.value,
+                                                            "error": str(exc)})
+        return blocks, False
+    if alternative.get(PRIMARY_BLOCK[vertical]):
+        FALLTHROUGH.labels(vertical.value, "served").inc()
+        return alternative, True
+    FALLTHROUGH.labels(vertical.value, "kept_primary").inc()
+    return blocks, False
 
 
 async def _timed_provider_search(
@@ -115,11 +156,30 @@ async def handle_vertical(
     db: Database,
     redis_client: aioredis.Redis,
     provider_factory: ProviderFactory,
+    policy: PolicyGate,
 ) -> BaseSearchResponse:
     settings = get_settings()
     start = time.perf_counter()
     status = "error"
     try:
+        # Classification gate FIRST (plan 3.2): a sensitive query fails closed
+        # before the rate limiter, quota, cache, and every provider path —
+        # nothing about it egresses, persists, or costs credits.
+        category = policy.check(body.q)
+        if category is not None:
+            status = "policy_blocked"
+            POLICY_BLOCKED.labels(category).inc()
+            logger.warning(
+                "query blocked by policy",
+                extra={
+                    "api_key": api_key.name,
+                    "vertical": vertical.value,
+                    "category": category,
+                    "query_hash": hashlib.sha256(body.q.encode()).hexdigest()[:16],
+                },
+            )
+            raise PolicyBlockedError(category)
+
         limiter = RateLimiter(redis_client, settings.rate_limit_qps, settings.rate_limit_burst)
         allowed, retry_after = await limiter.check(api_key.id)
         if not allowed:
@@ -144,10 +204,13 @@ async def handle_vertical(
         served_from_cache = cached is not None
         CACHE_REQUESTS.labels(vertical.value, "hit" if served_from_cache else "miss").inc()
 
+        blocks: dict[str, Any]
         if cached is not None:
-            blocks: dict[str, Any] = cached["blocks"]
+            blocks = dict(cached["blocks"])
+            if "searchMeta" in blocks:
+                blocks["searchMeta"] = {**blocks["searchMeta"], "cached": True}
             source_provider: str = cached.get("provider", "unknown")
-            provenance: dict[str, str] = dict.fromkeys(blocks, "cache")
+            provenance: dict[str, str] = {b: "cache" for b in blocks if b != "searchMeta"}
         else:
             provider_name = settings.provider_for(vertical)
             try:
@@ -177,11 +240,28 @@ async def handle_vertical(
                     status_code=502, detail="Upstream search provider failed"
                 ) from exc
             source_provider = provider.name.value
-            provenance = dict.fromkeys(blocks, source_provider)
+            meta = blocks.get("searchMeta")
+            if meta is not None:
+                QUALITY_SCORE.labels(vertical.value).observe(meta["qualityScore"])
+                if meta["degraded"]:
+                    DEGRADED_RESPONSES.labels(vertical.value).inc()
+            if (
+                meta is not None
+                and meta["degraded"]
+                and settings.quality_fallthrough
+                and provider.name is not ProviderName.COMMERCIAL
+                and vertical in PRIMARY_BLOCK
+            ):
+                blocks, served_by_commercial = await _try_fallthrough(
+                    blocks, body, vertical, provider_factory
+                )
+                if served_by_commercial:
+                    source_provider = ProviderName.COMMERCIAL.value
+            provenance = {b: source_provider for b in blocks if b != "searchMeta"}
             if (
                 vertical is Vertical.SEARCH
                 and settings.search_enrichment
-                and provider.name is not ProviderName.COMMERCIAL
+                and source_provider != ProviderName.COMMERCIAL.value
             ):
                 await _enrich_search(blocks, provenance, body, provider_factory)
             await cache.set(
@@ -223,17 +303,24 @@ async def handle_vertical(
         if body.debug:
             response.providersUsed = provenance
         status = "success"
-        logger.info(
-            "request served",
-            extra={
-                "api_key": api_key.name,
-                "vertical": vertical.value,
-                "provider": source_provider,
-                "cached": served_from_cache,
-                "latency_ms": latency_ms,
-                "credits": cost,
-            },
-        )
+        log_fields: dict[str, Any] = {
+            "api_key": api_key.name,
+            "vertical": vertical.value,
+            "provider": source_provider,
+            "cached": served_from_cache,
+            "latency_ms": latency_ms,
+            "credits": cost,
+            # query text is never logged by default (log hygiene, plan 3.3);
+            # the short hash still lets identical queries be correlated.
+            "query_hash": hashlib.sha256(body.q.encode()).hexdigest()[:16],
+        }
+        if settings.log_queries:
+            log_fields["query"] = body.q
+        meta_block = blocks.get("searchMeta")
+        if meta_block is not None:
+            log_fields["quality_score"] = meta_block["qualityScore"]
+            log_fields["degraded"] = meta_block["degraded"]
+        logger.info("request served", extra=log_fields)
         return response
     finally:
         REQUESTS.labels(vertical.value, status).inc()
@@ -250,8 +337,11 @@ def _make_endpoint(vertical: Vertical) -> Endpoint:
         db: Annotated[Database, Depends(get_db)],
         redis_client: Annotated[aioredis.Redis, Depends(get_redis)],
         provider_factory: Annotated[ProviderFactory, Depends(get_provider_factory)],
+        policy: Annotated[PolicyGate, Depends(get_policy)],
     ) -> BaseSearchResponse:
-        return await handle_vertical(vertical, body, api_key, db, redis_client, provider_factory)
+        return await handle_vertical(
+            vertical, body, api_key, db, redis_client, provider_factory, policy
+        )
 
     endpoint.__name__ = vertical.value
     return endpoint

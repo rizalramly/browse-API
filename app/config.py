@@ -82,6 +82,41 @@ class Settings(BaseSettings):
     breaker_failure_threshold: int = 5
     breaker_recovery_seconds: float = 30.0
 
+    # Result-quality scoring (searchMeta). score = wc*coverage + ws*sufficiency
+    # - wd*duplicateRate, clamped to [0, 1]; degraded when below the threshold.
+    quality_weight_coverage: float = 0.5
+    quality_weight_sufficiency: float = 0.5
+    quality_weight_duplicates: float = 0.3
+    quality_degraded_threshold: float = 0.5
+
+    # Quality fall-through: when a genxng response is degraded and the
+    # commercial provider is configured, serve the commercial result instead.
+    quality_fallthrough: bool = True
+
+    # Outbound pacing toward the genxng backend (the egress-facing traffic):
+    # consumer spikes queue and smooth instead of bursting through the proxy.
+    # Set from the measured ceiling (scripts/ceiling_probe.py) with headroom;
+    # qps <= 0 disables pacing.
+    outbound_qps: float = 2.0
+    outbound_burst: int = 5
+    outbound_jitter_seconds: float = 0.3
+    outbound_max_wait_seconds: float = 20.0
+
+    # Engine health probes: interval seconds (0 disables the background task)
+    # and consecutive failures before an engine is quarantined. Each round
+    # probes every enabled engine once — keep the interval generous on a
+    # single shared egress (probes are outbound traffic too).
+    engine_probe_interval: float = 900.0
+    engine_fail_threshold: int = 3
+
+    # Log hygiene: query text is never logged unless explicitly enabled;
+    # request logs carry a short hash for correlation instead.
+    log_queries: bool = False
+
+    # Egress classification gate: deny-list of sensitive-query patterns.
+    # Matching queries fail closed with 403 before any egress or caching.
+    policy_path: str = "policy/sensitive.yml"
+
     redis_url: str = "redis://redis:6379/0"
     database_url: str = "postgresql://gen:gen@postgres:5432/gen"
     searxng_url: str = "http://searxng:8080"

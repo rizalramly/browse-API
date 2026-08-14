@@ -45,3 +45,7 @@ def setup_logging(level: str = "INFO") -> None:
     access = logging.getLogger("uvicorn.access")
     access.handlers = []
     access.propagate = False
+    # Log hygiene (plan 3.3): httpx logs full request URLs at INFO, which
+    # would leak query text into logs. Keep HTTP client loggers at WARNING.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)

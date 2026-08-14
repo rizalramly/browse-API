@@ -13,6 +13,7 @@ dependencies = [
     "hvac>=2.1",
     "asyncpg>=0.29",
     "prometheus-client>=0.20",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +23,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "fakeredis[lua]>=2.23",
+    "types-PyYAML",
 ]
 
 [build-system]

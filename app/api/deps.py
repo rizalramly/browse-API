@@ -6,6 +6,7 @@ from fastapi import Request
 
 from app.config import ProviderName
 from app.db import Database
+from app.policy import PolicyGate, get_policy_gate
 from app.providers import SearchProvider, get_provider
 
 ProviderFactory = Callable[[ProviderName], SearchProvider]
@@ -23,3 +24,7 @@ def get_redis(request: Request) -> aioredis.Redis:
 
 def get_provider_factory() -> ProviderFactory:
     return get_provider
+
+
+def get_policy() -> PolicyGate:
+    return get_policy_gate()

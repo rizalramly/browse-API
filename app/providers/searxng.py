@@ -12,7 +12,10 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import ProviderName, Settings, Vertical
+from app.engine_health import get_engine_monitor
+from app.pacing import OutboundPacer, OutboundSaturatedError
 from app.providers.base import ProviderError, SearchProvider, UnsupportedVerticalError
+from app.quality import build_search_meta
 from app.schemas import SearchRequest
 
 logger = logging.getLogger(__name__)
@@ -192,11 +195,19 @@ NORMALIZERS = {
 class SearXNGProvider(SearchProvider):
     name = ProviderName.GENXNG
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
+        self._settings = settings
         self._base_url = settings.searxng_url.rstrip("/")
-        self._client = httpx.AsyncClient(timeout=settings.http_timeout)
+        self._client = httpx.AsyncClient(timeout=settings.http_timeout, transport=transport)
+        self._pacer = OutboundPacer.from_settings(settings)
 
     async def _get_json(self, path: str, params: dict[str, str | int]) -> Any:
+        try:
+            await self._pacer.acquire()
+        except OutboundSaturatedError as exc:
+            raise ProviderError(f"genxng outbound pacing saturated: {exc}") from exc
         try:
             response = await self._client.get(f"{self._base_url}{path}", params=params)
         except httpx.HTTPError as exc:
@@ -226,9 +237,16 @@ class SearXNGProvider(SearchProvider):
         }
         if request.tbs in TBS_TO_TIME_RANGE:
             params["time_range"] = TBS_TO_TIME_RANGE[request.tbs]
+        # Engine quarantine (plan 2.2): when the health monitor has flagged
+        # engines in this category, explicitly select only the healthy ones.
+        healthy = get_engine_monitor(self._settings).healthy_for(category)
+        if healthy is not None:
+            params["engines"] = ",".join(healthy)
 
         raw = await self._get_json("/search", params)
-        return NORMALIZERS[vertical](raw, request.num)
+        blocks = NORMALIZERS[vertical](raw, request.num)
+        blocks["searchMeta"] = build_search_meta(raw, blocks, request.num, self._settings)
+        return blocks
 
     async def aclose(self) -> None:
         await self._client.aclose()

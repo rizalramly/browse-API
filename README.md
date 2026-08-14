@@ -62,10 +62,41 @@ cover the cost, and nothing is charged for failed requests. A per-key token
 bucket (`RATE_LIMIT_QPS`/`RATE_LIMIT_BURST`) returns `429` with `Retry-After`.
 Every served request is recorded in the Postgres `usage_log` table.
 
+Governance: a classification gate ([policy/sensitive.yml](policy/sensitive.yml),
+versioned seed deny-list — refine with governance review) runs before the
+cache and every provider. Matching queries **fail closed**: HTTP 403 with
+`policyBlocked: true`, no egress on any path, no cache write, no charge, and
+only a hashed query in logs. Be precise about the model: for allowed queries
+the query text *does* reach the upstream engines GenXNG scrapes — what this
+service avoids versus a commercial SERP vendor is third-party SaaS account
+retention, not egress. Truly sensitive queries must not hit any external
+search, which is exactly what the gate enforces.
+
+Result quality: GenXNG-served responses carry a `searchMeta` block
+(engine coverage, result sufficiency, duplicate rate, weighted
+`qualityScore`, `degraded` flag) so consumers can detect
+plausible-but-degraded results instead of trusting HTTP 200. Weights and
+threshold via `QUALITY_*` env vars.
+
+Quality fall-through: when a GenXNG response is degraded and the commercial
+provider is configured, the API retries via commercial and serves the better
+result (`QUALITY_FALLTHROUGH`, on by default; fails soft). `providersUsed`
+and the `gen_api_fallthrough_total{outcome}` metric report the truth about
+who served — a rising fall-through rate means GenXNG is quietly failing.
+
+Engine health: a background task probes every enabled engine
+(`ENGINE_PROBE_INTERVAL`, 15 min default; each round is real outbound
+traffic, so tune to your egress budget). An engine failing
+`ENGINE_FAIL_THRESHOLD` consecutive probes is quarantined — live requests
+select only healthy engines for its category — and auto-recovers on the
+next good probe. `gen_api_healthy_engines{category}` exposes the count.
+
 Observability: Prometheus metrics at `/metrics` — request counts by outcome,
 provider success/error rates, latency histograms (p50/p95 via
-`histogram_quantile`), and cache hit rate, all labelled per vertical and
-provider. Logs are structured JSON, one `request served` line per request.
+`histogram_quantile`), cache hit rate, `qualityScore` distribution and
+degraded-response counts, all labelled per vertical and provider. Logs are
+structured JSON, one `request served` line per request; query text is never
+logged (a 16-char hash correlates repeats; opt in with `LOG_QUERIES=true`).
 
 ## Development
 
@@ -79,7 +110,10 @@ mypy
 ```
 
 A step-by-step consumer guide (auth, all endpoints, error handling, credits,
-rate limits) lives in [docs/API_USAGE.md](docs/API_USAGE.md).
+rate limits) lives in [docs/API_USAGE.md](docs/API_USAGE.md). Operators:
+[docs/RUNBOOK.md](docs/RUNBOOK.md) — dashboard questions with PromQL, alert
+thresholds, block-spike response, weekly probe schedule, and the fallback
+economics note.
 
 ## Using it from RAG code
 
@@ -93,6 +127,34 @@ context = client.snippets("attention is all you need", num=5)
 
 [examples/rag_client.py](examples/rag_client.py) is dependency-light (httpx
 only) and made to be copied into consumer codebases.
+
+## Egress protection (single shared proxy)
+
+Outbound calls to the metasearch backend are paced by a GCRA-style limiter
+(`OUTBOUND_QPS`/`OUTBOUND_BURST`, jittered): consumer spikes queue and
+smooth instead of bursting through the egress; a queue deeper than
+`OUTBOUND_MAX_WAIT_SECONDS` fails fast with 502. Queue depth is visible as
+`gen_api_outbound_wait_seconds`.
+
+Two measurement scripts are made to run **on the app server, through the
+corporate proxy** (they honor `HTTPS_PROXY` env vars):
+
+```bash
+python scripts/ceiling_probe.py --rates 0.2,0.5,1,2 --step-seconds 60
+```
+ramps real SERP-shaped request rates until the first block signature
+(429/403, captcha/consent redirect, "unusual traffic") and reports the last
+safe rate plus a suggested `OUTBOUND_QPS` (25% headroom). **It deliberately
+provokes a block at the end — coordinate with ICT, run off-peak, re-run
+weekly.**
+
+```bash
+python scripts/engine_probe.py --apply
+```
+checks every engine endpoint through the proxy and regenerates the
+probe-managed `engines:` section of `searxng/settings.yml`, each entry
+annotated `# passes proxy (checked YYYY-MM-DD)` or disabled with the
+evidence — the engine set stays measured, not assumed.
 
 ## Load testing
 

@@ -157,6 +157,7 @@ configured; until then they return `501` with an explanatory message — treat
 |--------|--------------------------------------|---------------------------------------------------|
 | `401`  | Missing or invalid `X-API-KEY`       | Fix credentials; do not retry                     |
 | `402`  | Credit balance can't cover the query | Stop; ask the operator to top up the key          |
+| `403`  | Query blocked by the sensitivity policy (`policyBlocked: true` + `category`) | Do not retry or rephrase-and-retry automatically; answer from internal knowledge only. The query never left the service. |
 | `422`  | Invalid body (missing `q`, unknown field, `num` out of range) | Fix the request; do not retry |
 | `429`  | Rate limit exceeded                  | Wait `Retry-After` seconds (header), then retry   |
 | `501`  | Vertical not enabled / not supported by its provider | Don't retry; feature-flag this vertical off |
@@ -183,6 +184,34 @@ open — so keep your own retry policy modest (e.g. one retry after 30–60s on
   Cached responses return in ~10–70 ms and still deduct credits.
 - Identical repeated queries are therefore cheap on latency and provider
   load — design your pipeline to reuse stable query strings where possible.
+
+## Step 7b — Read the quality signal (`searchMeta`)
+
+Responses served by the GenXNG backend carry a machine-readable quality
+signal. A degraded search still returns HTTP 200 — **check `degraded`, don't
+trust the status code**:
+
+```json
+"searchMeta": {
+  "enginesQueried": 8,      // engines asked
+  "enginesResponded": 2,    // engines that actually answered
+  "engineCoverage": 0.25,
+  "resultCount": 6,
+  "duplicateRate": 0.0,
+  "qualityScore": 0.41,     // weighted 0..1 (coverage + sufficiency - dupes)
+  "cached": false,          // true when served from the response cache
+  "degraded": true          // qualityScore below the configured threshold
+}
+```
+
+RAG pipelines should treat `degraded: true` as "consider a fallback source or
+tell the user context is thin". The block is absent on commercial-served
+verticals and `/autocomplete`. When the deployment has a commercial provider
+configured, degraded responses are usually upgraded automatically before you
+see them (in-API quality fall-through) — a response with `searchMeta` absent
+and `providersUsed.organic: "commercial"` under `debug` means exactly that. Score weights and the degraded threshold are
+deployment-configurable (`QUALITY_*` env vars); the score distribution and
+degraded-response rate are visible in `/metrics`.
 
 To see where each block came from, send `"debug": true`:
 

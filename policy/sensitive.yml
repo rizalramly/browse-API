@@ -1,0 +1,31 @@
+# Egress classification gate deny-list (improvement plan 3.2).
+#
+# A query matching ANY pattern below is refused with HTTP 403 BEFORE any
+# cache read, provider call, or upstream egress — on the primary path and
+# every fallback path. Fail closed: sensitive queries never leave.
+#
+# Patterns are case-insensitive Python regexes, grouped by category (the
+# category is returned in the 403 body and metrics, never the query text).
+#
+# These are SEED patterns. Refine them with governance/ICT review; keep this
+# file in git so the deny-list is versioned and auditable.
+version: 1
+categories:
+  confidential-markers:
+    - '\b(sulit|confidential|terhad)\b'
+    - '\bnot\s+for\s+(distribution|circulation)\b'
+    - '\binternal\s+(use\s+)?only\b'
+  grid-operations:
+    - '\bscada\b'
+    - '\bgrid\s+(topology|map|diagram|vulnerabilit\w+)\b'
+    - '\b(load|national)\s+dispatch\s+(centre|center|data)\b'
+    - '\bsubstation\s+(layout|schematic|access)\b'
+  security:
+    - '\b(tnb|internal|corporate)\s+(security|vulnerabilit\w+|pentest|penetration\s+test)\b'
+    - '\bincident\s+report\s+#?\w+-\d+\b'
+    - '\b(password|credential)s?\s+(list|dump|file)\b'
+  procurement:
+    - '\b(tender|procurement|rfp|rfq)\s+(evaluation|committee|scoring|award|shortlist)\b'
+    - '\bvendor\s+(blacklist|negotiation)\b'
+  named-assets:
+    - '\b(janamanjung|kapar|connaught\s+bridge|gelugor|paka)\b.*\b(fault|failure|incident|outage|shutdown)\b'

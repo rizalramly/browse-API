@@ -34,11 +34,27 @@ class SearchParameters(BaseModel):
     type: str
 
 
+class SearchMeta(BaseModel):
+    """Machine-readable result-quality signal (genxng-served verticals)."""
+
+    enginesQueried: int
+    enginesResponded: int
+    engineCoverage: float
+    resultCount: int
+    duplicateRate: float
+    qualityScore: float
+    cached: bool = False
+    degraded: bool
+
+
 class BaseSearchResponse(BaseModel):
     """Fields every response carries; vertical responses extend this."""
 
     searchParameters: SearchParameters
     credits: int = 1
+    searchMeta: SearchMeta | None = Field(
+        None, description="result-quality signal; consumers should act on `degraded`"
+    )
     providersUsed: dict[str, str] | None = Field(
         None, description="block name -> provider, present only when debug=true"
     )

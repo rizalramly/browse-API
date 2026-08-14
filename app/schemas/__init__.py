@@ -1,6 +1,6 @@
 """Canonical Gen schemas. Every provider normalizes into these."""
 from app.schemas.autocomplete import AutocompleteResponse, Suggestion
-from app.schemas.common import BaseSearchResponse, SearchParameters, SearchRequest
+from app.schemas.common import BaseSearchResponse, SearchMeta, SearchParameters, SearchRequest
 from app.schemas.images import ImageResult, ImagesResponse
 from app.schemas.news import NewsResponse, NewsResult
 from app.schemas.patents import PatentResult, PatentsResponse
@@ -34,6 +34,7 @@ __all__ = [
     "RelatedSearch",
     "ScholarResponse",
     "ScholarResult",
+    "SearchMeta",
     "SearchParameters",
     "SearchRequest",
     "SearchResponse",
