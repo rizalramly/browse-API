@@ -1,9 +1,12 @@
 # gen-api — Step-by-Step Usage Guide
 
+_Last updated: 2026-08-14_
+
 How to call the gen-api web-search service, from zero to production use.
 Audience: developers integrating RAG pipelines, agents, or any internal
 consumer. For operating the service itself (deploy, config, providers), see
-the [README](../README.md).
+the [README](../README.md); for running it in production (dashboards, alert
+thresholds, incident response), see the [RUNBOOK](RUNBOOK.md).
 
 ---
 
@@ -22,7 +25,7 @@ curl http://localhost:8000/health/deps
 ```
 
 ```json
-{"status": "ok", "redis": "ok", "postgres": "ok", "searxng": "ok"}
+{"status": "ok", "redis": "ok", "postgres": "ok", "genxng": "ok"}
 ```
 
 Interactive OpenAPI docs are at <http://localhost:8000/docs> — every endpoint
@@ -161,12 +164,17 @@ configured; until then they return `501` with an explanatory message — treat
 | `422`  | Invalid body (missing `q`, unknown field, `num` out of range) | Fix the request; do not retry |
 | `429`  | Rate limit exceeded                  | Wait `Retry-After` seconds (header), then retry   |
 | `501`  | Vertical not enabled / not supported by its provider | Don't retry; feature-flag this vertical off |
-| `502`  | Upstream provider failed (after internal retries) | Retry later with backoff; the service already retried twice and may have opened a circuit breaker |
+| `502`  | Upstream provider failed (after internal retries), circuit breaker open, or the outbound egress queue is saturated | Retry later with backoff; the service already retried and is protecting the shared egress |
 
-Error bodies are always `{"detail": "<human-readable reason>"}`. Example:
+Error bodies carry `{"detail": "<human-readable reason>"}`; the policy `403`
+additionally carries machine-readable fields:
 
 ```json
 {"detail": "Insufficient credits: balance 0, cost 1"}
+```
+
+```json
+{"detail": "query blocked by policy", "policyBlocked": true, "category": "grid-operations"}
 ```
 
 Note on retries: the service itself retries transient provider failures
@@ -209,9 +217,10 @@ tell the user context is thin". The block is absent on commercial-served
 verticals and `/autocomplete`. When the deployment has a commercial provider
 configured, degraded responses are usually upgraded automatically before you
 see them (in-API quality fall-through) — a response with `searchMeta` absent
-and `providersUsed.organic: "commercial"` under `debug` means exactly that. Score weights and the degraded threshold are
-deployment-configurable (`QUALITY_*` env vars); the score distribution and
-degraded-response rate are visible in `/metrics`.
+and `providersUsed.organic: "commercial"` under `debug` means exactly that.
+Score weights and the degraded threshold are deployment-configurable
+(`QUALITY_*` env vars); the score distribution and degraded-response rate
+are visible in `/metrics`.
 
 To see where each block came from, send `"debug": true`:
 
@@ -268,7 +277,14 @@ client.close()
 - **Your query history**: every served request is recorded in the `usage_log`
   table (vertical, provider, cached, credits, latency).
 - **Service-wide metrics**: Prometheus at `http://localhost:8000/metrics` —
-  request counts by outcome, cache hit rate, provider latency p50/p95.
+  request counts by outcome, cache hit rate, provider latency p50/p95,
+  `qualityScore` distribution, degraded/fall-through/policy-block counters,
+  healthy-engine gauges, and outbound-queue wait times. The
+  [RUNBOOK](RUNBOOK.md) turns these into dashboard queries and alert
+  thresholds.
+- **Privacy**: your query text is never written to logs or the usage table —
+  request logs carry only a short hash. Queries matching the sensitivity
+  policy are refused before any egress (see the `403` row above).
 
 ---
 
@@ -280,8 +296,10 @@ Auth         X-API-KEY: <key>               (all POST endpoints)
 Body         {"q": "...", ...}              (q required, JSON)
 Endpoints    /search /images /news /videos /autocomplete   (live)
              /places /shopping /scholar /patents           (need commercial key)
-Success      200 + {searchParameters, credits, <blocks>}
-Failures     401 auth · 402 credits · 422 bad body · 429 slow down (Retry-After)
-             501 vertical off · 502 upstream down (retry later)
+Success      200 + {searchParameters, credits, <blocks>, searchMeta?}
+             -> check searchMeta.degraded, not just the status code
+Failures     401 auth · 402 credits · 403 policy block (never auto-retry)
+             422 bad body · 429 slow down (Retry-After)
+             501 vertical off · 502 upstream/egress down (retry later)
 Docs/health  /docs · /healthz · /health/deps · /metrics    (no auth)
 ```

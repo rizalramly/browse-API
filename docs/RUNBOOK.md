@@ -1,5 +1,7 @@
 # gen-api Runbook
 
+_Last updated: 2026-08-14_
+
 Operating guide for the self-hosted search API sitting first in the
 web-search provider chain, behind a single corporate (Zscaler) egress.
 
